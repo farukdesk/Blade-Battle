@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blade Battle</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb" crossorigin="anonymous"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const { Engine, Render, Runner, Bodies, Body, World, Events } = Matter;
+
+    const engine = Engine.create({ gravity: { y: 0.5 } });
+    const world = engine.world;
+
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+
+    const render = Render.create({
+      element: document.body,
+      engine: engine,
+      options: {
+        width: W,
+        height: H,
+        wireframes: false,
+        background: '#1a1a2e',
+      },
+    });
+
+    const WALL = 60;
+
+    const walls = [
+      Bodies.rectangle(W / 2, -WALL / 2,     W + WALL * 2, WALL, { isStatic: true, label: 'wall', render: { fillStyle: '#2d2d2d' } }),
+      Bodies.rectangle(W / 2, H + WALL / 2,  W + WALL * 2, WALL, { isStatic: true, label: 'wall', render: { fillStyle: '#2d2d2d' } }),
+      Bodies.rectangle(-WALL / 2, H / 2,     WALL, H, { isStatic: true, label: 'wall', render: { fillStyle: '#2d2d2d' } }),
+      Bodies.rectangle(W + WALL / 2, H / 2,  WALL, H, { isStatic: true, label: 'wall', render: { fillStyle: '#2d2d2d' } }),
+    ];
+
+    World.add(world, walls);
+
+    const blades = [];
+    // Angular velocity applied each tick (radians per update) to keep blades spinning
+    const BLADE_ANGULAR_VELOCITY = 0.08;
+    const BLADE_LIFETIME_MS = 60000; // remove blades after 60 s to prevent buildup
+
+    Events.on(engine, 'beforeUpdate', () => {
+      blades.forEach((blade) => {
+        Body.setAngularVelocity(blade, BLADE_ANGULAR_VELOCITY);
+      });
+    });
+
+    const socket = io();
+
+    socket.on('spawnBlade', (data) => {
+      const { uniqueId, profilePictureUrl, size, boosted } = data;
+      const radius = size / 2;
+
+      const x = Math.random() * (W - size * 2) + size;
+      const y = Math.random() * (H / 2 - size * 2) + size;
+
+      const blade = Bodies.circle(x, y, radius, {
+        restitution: 0.95,
+        friction: 0,
+        frictionAir: 0,
+        label: uniqueId,
+        render: {
+          sprite: {
+            texture: profilePictureUrl,
+            xScale: size / 128,
+            yScale: size / 128,
+          },
+        },
+      });
+
+      if (boosted) {
+        Body.setVelocity(blade, {
+          x: (Math.random() - 0.5) * 10,
+          y: (Math.random() - 0.5) * 10,
+        });
+      }
+
+      World.add(world, blade);
+      blades.push(blade);
+
+      setTimeout(() => {
+        World.remove(world, blade);
+        const idx = blades.indexOf(blade);
+        if (idx !== -1) blades.splice(idx, 1);
+      }, BLADE_LIFETIME_MS);
+    });
+
+    Render.run(render);
+    const runner = Runner.create();
+    Runner.run(runner, engine);
+
+    window.addEventListener('resize', () => {
+      const nW = window.innerWidth;
+      const nH = window.innerHeight;
+
+      render.canvas.width = nW;
+      render.canvas.height = nH;
+      render.options.width = nW;
+      render.options.height = nH;
+
+      // Reposition boundary walls to match new dimensions
+      Body.setPosition(walls[0], { x: nW / 2,       y: -WALL / 2      });
+      Body.setPosition(walls[1], { x: nW / 2,       y: nH + WALL / 2  });
+      Body.setPosition(walls[2], { x: -WALL / 2,    y: nH / 2         });
+      Body.setPosition(walls[3], { x: nW + WALL / 2, y: nH / 2        });
+
+      // Update top/bottom wall width and left/right wall height
+      Body.setVertices(walls[0], Bodies.rectangle(nW / 2, -WALL / 2,      nW + WALL * 2, WALL).vertices);
+      Body.setVertices(walls[1], Bodies.rectangle(nW / 2, nH + WALL / 2,  nW + WALL * 2, WALL).vertices);
+      Body.setVertices(walls[2], Bodies.rectangle(-WALL / 2, nH / 2,      WALL, nH).vertices);
+      Body.setVertices(walls[3], Bodies.rectangle(nW + WALL / 2, nH / 2,  WALL, nH).vertices);
+    });
+  </script>
+</body>
+</html>

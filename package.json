@@ -1,0 +1,14 @@
+{
+  "name": "blade-battle",
+  "version": "1.0.0",
+  "description": "TikTok Live game where chat messages and gifts spawn spinning saw blades",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3",
+    "tiktok-live-connector": "^2.1.0"
+  }
+}
