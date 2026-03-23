@@ -8,9 +8,141 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { overflow: hidden; background: #000; }
     canvas { display: block; }
+
+    #hud {
+      position: fixed;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font-family: Arial, sans-serif;
+      font-size: 22px;
+      font-weight: bold;
+      text-shadow: 0 0 8px rgba(255, 200, 0, 0.8);
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    #leaderboard {
+      position: fixed;
+      top: 8px;
+      right: 8px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      font-family: Arial, sans-serif;
+      font-size: 11px;
+      border-radius: 6px;
+      padding: 5px 7px;
+      z-index: 10;
+      min-width: 100px;
+      max-width: 130px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    #leaderboard h3 {
+      font-size: 11px;
+      text-align: center;
+      margin-bottom: 3px;
+      color: #ffd700;
+    }
+
+    .lb-entry {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .lb-entry:last-child { border-bottom: none; }
+
+    .lb-avatar {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+
+    .lb-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lb-pts {
+      color: #ffd700;
+      font-weight: bold;
+      flex-shrink: 0;
+    }
+
+    #winner-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.78);
+      z-index: 20;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+
+    #winner-overlay.visible { display: flex; }
+
+    #winner-title {
+      font-size: 26px;
+      font-weight: bold;
+      color: #ffd700;
+      margin-bottom: 12px;
+    }
+
+    #winner-avatar {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      border: 3px solid #ffd700;
+      margin-bottom: 10px;
+    }
+
+    #winner-name {
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    #winner-score {
+      font-size: 15px;
+      color: #aaa;
+      margin-bottom: 14px;
+    }
+
+    #restart-countdown {
+      font-size: 13px;
+      color: #88aaff;
+    }
   </style>
 </head>
 <body>
+  <div id="hud">2:00</div>
+
+  <div id="leaderboard">
+    <h3>🏆 TOP</h3>
+    <div id="lb-list"></div>
+  </div>
+
+  <div id="winner-overlay">
+    <div id="winner-title">🏆 WINNER! 🏆</div>
+    <img id="winner-avatar" src="" alt="winner" />
+    <div id="winner-name"></div>
+    <div id="winner-score"></div>
+    <div id="restart-countdown">New game in 10s…</div>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb" crossorigin="anonymous"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script>
@@ -47,17 +179,167 @@
     const blades = [];
     // Angular velocity applied each tick (radians per update) to keep blades spinning
     const BLADE_ANGULAR_VELOCITY = 0.08;
-    const BLADE_LIFETIME_MS = 60000; // remove blades after 60 s to prevent buildup
+
+    // Stuck-detection: track consecutive low-speed frames per blade
+    const stuckFrames = new Map();
+    const STUCK_SPEED_THRESHOLD_SQ = 0.3 * 0.3; // compare squared to avoid sqrt each frame
+    const STUCK_FRAMES_LIMIT = 90; // ~1.5 s at 60 fps
+
+    // Scores: uniqueId -> { points, profilePictureUrl, name }
+    const scores = {};
+
+    // Game timer
+    const GAME_DURATION = 120; // seconds
+    let gameTimeLeft = GAME_DURATION;
+    let gameOver = false;
+    let gameTimerInterval = null;
+
+    const hudEl = document.getElementById('hud');
+    const lbListEl = document.getElementById('lb-list');
+    const winnerOverlay = document.getElementById('winner-overlay');
+    const winnerAvatarEl = document.getElementById('winner-avatar');
+    const winnerNameEl = document.getElementById('winner-name');
+    const winnerScoreEl = document.getElementById('winner-score');
+    const restartCountdownEl = document.getElementById('restart-countdown');
+
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function safePicUrl(url) {
+      // Allow only http/https URLs to prevent javascript: injection
+      return (typeof url === 'string' && /^https?:\/\//i.test(url)) ? url : '';
+    }
+
+    function updateLeaderboard() {
+      const sorted = Object.entries(scores)
+        .sort((a, b) => b[1].points - a[1].points)
+        .slice(0, 8);
+
+      lbListEl.innerHTML = sorted.map(([, data]) =>
+        `<div class="lb-entry">
+          <img class="lb-avatar" src="${safePicUrl(data.profilePictureUrl)}" alt="" onerror="this.style.display='none'" />
+          <span class="lb-name">${data.name}</span>
+          <span class="lb-pts">${data.points}</span>
+        </div>`
+      ).join('');
+    }
+
+    function endGame() {
+      gameOver = true;
+      clearInterval(gameTimerInterval);
+      hudEl.textContent = '0:00';
+
+      const entries = Object.entries(scores);
+      if (entries.length === 0) {
+        scheduleRestart();
+        return;
+      }
+
+      const [winnerId, winnerData] = entries.reduce((best, curr) =>
+        curr[1].points > best[1].points ? curr : best
+      );
+
+      winnerAvatarEl.src = safePicUrl(winnerData.profilePictureUrl);
+      winnerNameEl.textContent = winnerData.name;
+      winnerScoreEl.textContent = `${winnerData.points} points`;
+      winnerOverlay.classList.add('visible');
+
+      scheduleRestart();
+    }
+
+    function scheduleRestart() {
+      let countdown = 10;
+      restartCountdownEl.textContent = `New game in ${countdown}s…`;
+      const interval = setInterval(() => {
+        countdown--;
+        restartCountdownEl.textContent = `New game in ${countdown}s…`;
+        if (countdown <= 0) {
+          clearInterval(interval);
+          restartGame();
+        }
+      }, 1000);
+    }
+
+    function restartGame() {
+      // Remove all blades from physics world
+      blades.forEach((b) => World.remove(world, b));
+      blades.length = 0;
+      stuckFrames.clear();
+
+      // Reset scores
+      Object.keys(scores).forEach((k) => delete scores[k]);
+      lbListEl.innerHTML = '';
+
+      // Reset timer
+      gameTimeLeft = GAME_DURATION;
+      gameOver = false;
+      hudEl.textContent = formatTime(gameTimeLeft);
+
+      // Hide winner overlay
+      winnerOverlay.classList.remove('visible');
+
+      startTimer();
+    }
+
+    function startTimer() {
+      gameTimerInterval = setInterval(() => {
+        if (gameOver) return;
+        gameTimeLeft--;
+        hudEl.textContent = formatTime(gameTimeLeft);
+        if (gameTimeLeft <= 0) {
+          endGame();
+        }
+      }, 1000);
+    }
+
+    startTimer();
+
+    // Score a point for each blade involved in a collision
+    Events.on(engine, 'collisionStart', (event) => {
+      if (gameOver) return;
+      let changed = false;
+      event.pairs.forEach((pair) => {
+        const a = pair.bodyA;
+        const b = pair.bodyB;
+        if (a.label !== 'wall' && b.label !== 'wall') {
+          if (scores[a.label]) { scores[a.label].points++; changed = true; }
+          if (scores[b.label]) { scores[b.label].points++; changed = true; }
+        }
+      });
+      if (changed) updateLeaderboard();
+    });
 
     Events.on(engine, 'beforeUpdate', () => {
       blades.forEach((blade) => {
+        // Keep blades spinning
         Body.setAngularVelocity(blade, BLADE_ANGULAR_VELOCITY);
+
+        // Anti-stuck: if speed is near zero for too long, apply a random nudge
+        const speedSq = blade.velocity.x ** 2 + blade.velocity.y ** 2;
+        if (speedSq < STUCK_SPEED_THRESHOLD_SQ) {
+          const frames = (stuckFrames.get(blade.id) || 0) + 1;
+          stuckFrames.set(blade.id, frames);
+          if (frames >= STUCK_FRAMES_LIMIT) {
+            Body.setVelocity(blade, {
+              x: (Math.random() - 0.5) * 8,
+              y: (Math.random() - 0.5) * 8,
+            });
+            stuckFrames.set(blade.id, 0);
+          }
+        } else {
+          stuckFrames.set(blade.id, 0);
+        }
       });
     });
 
     const socket = io();
 
     socket.on('spawnBlade', (data) => {
+      if (gameOver) return;
+
       const { uniqueId, profilePictureUrl, size, boosted } = data;
       const radius = size / 2;
 
@@ -78,21 +360,20 @@
         },
       });
 
-      if (boosted) {
-        Body.setVelocity(blade, {
-          x: (Math.random() - 0.5) * 10,
-          y: (Math.random() - 0.5) * 10,
-        });
-      }
+      // Give every blade an initial velocity so it starts moving immediately
+      Body.setVelocity(blade, {
+        x: (Math.random() - 0.5) * (boosted ? 10 : 6),
+        y: (Math.random() - 0.5) * (boosted ? 10 : 6),
+      });
 
       World.add(world, blade);
       blades.push(blade);
 
-      setTimeout(() => {
-        World.remove(world, blade);
-        const idx = blades.indexOf(blade);
-        if (idx !== -1) blades.splice(idx, 1);
-      }, BLADE_LIFETIME_MS);
+      // Register score entry for this player
+      if (!scores[uniqueId]) {
+        scores[uniqueId] = { points: 0, profilePictureUrl, name: uniqueId };
+      }
+      updateLeaderboard();
     });
 
     Render.run(render);
@@ -109,10 +390,10 @@
       render.options.height = nH;
 
       // Reposition boundary walls to match new dimensions
-      Body.setPosition(walls[0], { x: nW / 2,       y: -WALL / 2      });
-      Body.setPosition(walls[1], { x: nW / 2,       y: nH + WALL / 2  });
-      Body.setPosition(walls[2], { x: -WALL / 2,    y: nH / 2         });
-      Body.setPosition(walls[3], { x: nW + WALL / 2, y: nH / 2        });
+      Body.setPosition(walls[0], { x: nW / 2,        y: -WALL / 2      });
+      Body.setPosition(walls[1], { x: nW / 2,        y: nH + WALL / 2  });
+      Body.setPosition(walls[2], { x: -WALL / 2,     y: nH / 2         });
+      Body.setPosition(walls[3], { x: nW + WALL / 2, y: nH / 2         });
 
       // Update top/bottom wall width and left/right wall height
       Body.setVertices(walls[0], Bodies.rectangle(nW / 2, -WALL / 2,      nW + WALL * 2, WALL).vertices);
