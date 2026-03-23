@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 const { WebcastPushConnection } = require('tiktok-live-connector');
 
@@ -14,6 +15,11 @@ if (!TIKTOK_USERNAME) {
   console.warn('WARNING: TIKTOK_USERNAME environment variable is not set. No TikTok events will be received.');
   console.warn('Set it with: TIKTOK_USERNAME=your_tiktok_username node server.js');
 }
+
+// Serve Matter.js from the installed npm package (avoids CDN/SRI issues)
+app.use('/vendor/matter.min.js', express.static(
+  path.join(__dirname, 'node_modules/matter-js/build/matter.min.js')
+));
 
 app.use(express.static('public'));
 

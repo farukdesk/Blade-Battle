@@ -6,14 +6,45 @@
   <title>Blade Battle</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: #000; }
+    body { overflow: hidden; background: #1a1a2e; }
     canvas { display: block; }
+    #overlay {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-family: sans-serif;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #overlay h1 { font-size: 2.5rem; margin-bottom: 0.5rem; letter-spacing: 2px; }
+    #overlay p  { font-size: 1rem; opacity: 0.7; }
+    #error-message {
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-size: 1.2rem;
+    }
   </style>
 </head>
 <body>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb" crossorigin="anonymous"></script>
+  <div id="overlay">
+    <h1>⚔️ Blade Battle</h1>
+    <p>Waiting for TikTok Live events…</p>
+  </div>
+  <script src="/vendor/matter.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script>
+    if (typeof Matter === 'undefined') {
+      document.body.innerHTML = '<div id="error-message">Failed to load game engine. Please refresh the page.</div>';
+      throw new Error('Matter.js failed to load');
+    }
+
     const { Engine, Render, Runner, Bodies, Body, World, Events } = Matter;
 
     const engine = Engine.create({ gravity: { y: 0.5 } });
@@ -58,6 +89,10 @@
     const socket = io();
 
     socket.on('spawnBlade', (data) => {
+      // Hide the waiting overlay once blades start appearing
+      const overlay = document.getElementById('overlay');
+      if (overlay) overlay.style.display = 'none';
+
       const { uniqueId, profilePictureUrl, size, boosted } = data;
       const radius = size / 2;
 
